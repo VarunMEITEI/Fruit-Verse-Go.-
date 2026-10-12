@@ -1,0 +1,60 @@
+
+name: Build Fruit Verse Go APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'VarunFruit.zip'
+      - '.github/workflows/build-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get game files
+        uses: actions/checkout@v4
+
+      - name: Extract game ZIP
+        run: |
+          mkdir -p extracted-project
+          unzip -oq VarunFruit.zip -d extracted-project
+          PUBSPEC="$(find extracted-project -type f -name pubspec.yaml -print -quit)"
+          if [ -z "$PUBSPEC" ]; then
+            echo "Could not find pubspec.yaml"
+            exit 1
+          fi
+          PROJECT_DIR="${PUBSPEC%/pubspec.yaml}"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Fix geolocator version
+        run: |
+          sed -i 's/geolocator: \^13.0.2/geolocator: ^9.0.2/' pubspec.yaml
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Download dependencies
+        run: flutter pub get
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Build APK
+        run: flutter build apk --release
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fruit-Verse-Go-APK
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          
