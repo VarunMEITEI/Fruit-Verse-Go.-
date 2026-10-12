@@ -38,7 +38,10 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
-
+      - name: Fix geolocator version
+        run: |
+          sed -i 's/geolocator: \^13.0.2/geolocator: ^9.0.2/' pubspec.yaml
+        working-directory: ${{ env.PROJECT_DIR }}
       - name: Download dependencies
         run: flutter pub get
         working-directory: ${{ env.PROJECT_DIR }}
