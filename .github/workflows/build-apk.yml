@@ -1,0 +1,184 @@
+
+name: Build Fruit Verse Go APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'VarunFruit.zip'
+      - '.github/workflows/build-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Extract project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f VarunFruit.zip ]; then
+            echo "ERROR: VarunFruit.zip must be in the repository root."
+            exit 1
+          fi
+
+          rm -rf extracted-project
+          mkdir -p extracted-project
+          unzip -oq VarunFruit.zip -d extracted-project
+
+          PUBSPEC_PATH="$(find extracted-project -type f -name pubspec.yaml -print -quit)"
+          if [ -z "$PUBSPEC_PATH" ]; then
+            echo "ERROR: Could not find pubspec.yaml."
+            exit 1
+          fi
+
+          PROJECT_DIR="${PUBSPEC_PATH%/pubspec.yaml}"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Fix geolocator compatibility
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          pubspec = Path("pubspec.yaml")
+          text = pubspec.read_text()
+
+          old_dependency = "geolocator: ^13.0.2"
+          if old_dependency not in text:
+              raise SystemExit("Expected geolocator dependency not found.")
+
+          pubspec.write_text(
+              text.replace(old_dependency, "geolocator: ^9.0.2", 1)
+          )
+
+          main = Path("lib/main.dart")
+          source = main.read_text()
+
+          old_call = (
+              "Geolocator.getCurrentPosition(locationSettings: const LocationSettings("
+              "accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 20)))"
+          )
+
+          new_call = (
+              "Geolocator.getCurrentPosition("
+              "desiredAccuracy: LocationAccuracy.high, "
+              "timeLimit: const Duration(seconds: 20))"
+          )
+
+          if old_call not in source:
+              raise SystemExit("Expected GPS call not found in lib/main.dart.")
+
+          main.write_text(source.replace(old_call, new_call, 1))
+          PY
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Generate Android build files
+        run: flutter create --platforms=android --project-name fruit_verse_go .
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Configure Android permissions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          manifest = Path("android/app/src/main/AndroidManifest.xml")
+          content = manifest.read_text()
+
+          if "xmlns:android=" not in content:
+              content = content.replace(
+                  "<manifest",
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
+                  1,
+              )
+
+          permissions = [
+              "android.permission.INTERNET",
+              "android.permission.CAMERA",
+              "android.permission.ACCESS_FINE_LOCATION",
+              "android.permission.ACCESS_COARSE_LOCATION",
+          ]
+
+          for permission in permissions:
+              if permission not in content:
+                  content = content.replace(
+                      "<application",
+                      f'    <uses-permission android:name="{permission}" />\n    <application',
+                      1,
+                  )
+
+          if "android.hardware.camera.ar" not in content:
+              content = content.replace(
+                  "<application",
+                  '    <uses-feature android:name="android.hardware.camera.ar" android:required="false" />\n    <application',
+                  1,
+              )
+
+          if "com.google.ar.core" not in content:
+              content = content.replace(
+                  "</application>",
+                  '        <meta-data android:name="com.google.ar.core" android:value="optional" />\n    </application>',
+                  1,
+              )
+
+          content = content.replace(
+              'android:label="fruit_verse_go"',
+              'android:label="Fruit Verse Go"',
+          )
+          manifest.write_text(content)
+
+          for filename in (
+              "android/app/build.gradle.kts",
+              "android/app/build.gradle",
+          ):
+              gradle = Path(filename)
+              if gradle.exists():
+                  text = gradle.read_text()
+                  text = text.replace(
+                      "minSdk = flutter.minSdkVersion", "minSdk = 24"
+                  )
+                  text = text.replace(
+                      "minSdkVersion flutter.minSdkVersion",
+                      "minSdkVersion 24",
+                  )
+                  gradle.write_text(text)
+          PY
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Format Dart code
+        run: dart format lib
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Get dependencies
+        run: flutter pub get
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Build Android APK
+        run: flutter build apk --release
+        working-directory: ${{ env.PROJECT_DIR }}
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fruit-Verse-Go-APK
+          path: ${{ env.PROJECT_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          
